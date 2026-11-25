@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Нагрев прямоугольной мембраны</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      margin: 20px;
+    }
+
+    h1 {
+      font-size: 26px;
+      margin-bottom: 10px;
+    }
+
+    h2 {
+      font-size: 18px;
+      margin: 0 0 8px 0;
+    }
+
+    .controls {
+      background: #ffffff;
+      border: 1px solid #cccccc;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 20px;
+      max-width: 900px;
+    }
+
+    .controls label {
+      display: block;
+      margin-bottom: 12px;
+    }
+
+    .controls input[type="range"] {
+      width: 350px;
+      vertical-align: middle;
+    }
+
+    .controls input[type="checkbox"] {
+      transform: scale(1.2);
+      margin-right: 6px;
+    }
+
+    button {
+      padding: 7px 14px;
+      border: 1px solid #555;
+      background: #eeeeee;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 5px;
+      margin-right: 8px;
+    }
+
+    button:hover {
+      background: #dddddd;
+    }
+
+    .membranes {
+      display: flex;
+      gap: 25px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .membrane-box {
+      background: #ffffff;
+      border: 1px solid #cccccc;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    canvas {
+      width: 360px;
+      height: auto;
+      border: 1px solid #000000;
+      image-rendering: pixelated;
+      display: block;
+      background: #000;
+    }
+
+    .info {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #333;
+    }
+
+    .hint {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #444;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Симуляция нагрева прямоугольной мембраны</h1>
+
+  <div class="controls">
+    <label>
+      Коэффициент температуропроводности a²:
+      <span id="aValue">0.12</span>
+      <br>
+      <input type="range" id="aSlider" min="0.02" max="0.24" step="0.01" value="0.12">
+    </label>
+
+    <label>
+      Начальная температура мембраны:
+      <span id="initValue">0</span>
+      <br>
+      <input type="range" id="initSlider" min="0" max="80" step="1" value="0">
+    </label>
+
+    <label>
+      Высота мембраны:
+      <span id="heightValue">50</span>
+      <br>
+      <input type="range" id="heightSlider" min="20" max="80" step="1" value="50">
+    </label>
+
+    <label>
+      <input type="checkbox" id="uniformCheckbox" checked>
+      Равномерное распределение температуры по ширине
+    </label>
+
+    <button id="restartButton">Перезапустить симуляцию</button>
+    <button id="pauseButton">Пауза</button>
+
+    <div class="info" id="timeInfo">
+      Время: 0
+    </div>
+
+    <div class="hint">
+      Синий цвет — холоднее, красный / жёлтый — горячее.
+    </div>
+  </div>
+
+  <div class="membranes">
+    <div class="membrane-box">
+      <h2>Жесткое закрепление противоположной стороны</h2>
+      <canvas id="fixedCanvas"></canvas>
+      <div class="info" id="fixedStatus">Стационарное состояние: не достигнуто</div>
+    </div>
+
+    <div class="membrane-box">
+      <h2>Свободная противоположная сторона</h2>
+      <canvas id="freeCanvas"></canvas>
+      <div class="info" id="freeStatus">Стационарное состояние: не достигнуто</div>
+    </div>
+  </div>
+
+  <script>
+    const NX = 80;
+    const HEAT_TEMPERATURE = 80;
+    const STEPS_PER_FRAME = 25;
+
+    let NY = 50;
+
+    let fixedField = [];
+    let freeField = [];
+
+    let fixedSteady = [];
+    let freeSteady = [];
+
+    let currentTime = 0;
+    let animationId = null;
+    let paused = false;
+    let finished = false;
+
+    let fixedReached = false;
+    let freeReached = false;
+    let fixedReachedTime = null;
+    let freeReachedTime = null;
+
+    const fixedCanvas = document.getElementById("fixedCanvas");
+    const freeCanvas = document.getElementById("freeCanvas");
+
+    const fixedCtx = fixedCanvas.getContext("2d");
+    const freeCtx = freeCanvas.getContext("2d");
+
+    const aSlider = document.getElementById("aSlider");
+    const initSlider = document.getElementById("initSlider");
+    const heightSlider = document.getElementById("heightSlider");
+    const uniformCheckbox = document.getElementById("uniformCheckbox");
+
+    const restartButton = document.getElementById("restartButton");
+    const pauseButton = document.getElementById("pauseButton");
+
+    const aValue = document.getElementById("aValue");
+    const initValue = document.getElementById("initValue");
+    const heightValue = document.getElementById("heightValue");
+
+    const timeInfo = document.getElementById("timeInfo");
+    const fixedStatus = document.getElementById("fixedStatus");
+    const freeStatus = document.getElementById("freeStatus");
+
+    function getSteadyEpsilon() {
+      return Math.max(1, HEAT_TEMPERATURE * 0.02);
+    }
+
+    function createField() {
+      const field = [];
+      const initialTemperature = Number(initSlider.value);
+
+      for (let y = 0; y < NY; y++) {
+        const row = [];
+
+        for (let x = 0; x < NX; x++) {
+          row.push(initialTemperature);
+        }
+
+        field.push(row);
+      }
+
+      return field;
+    }
+
+    function updateLabels() {
+      aValue.textContent = aSlider.value;
+      initValue.textContent = initSlider.value;
+      heightValue.textContent = heightSlider.value;
+    }
+
+    function applyBoundaryConditions(field, topIsFixed) {
+      const uniform = uniformCheckbox.checked;
+
+      if (topIsFixed) {
+        for (let x = 0; x < NX; x++) {
+          field[0][x] = 0;
+        }
+      } else {
+        for (let x = 0; x < NX; x++) {
+          field[0][x] = field[1][x];
+        }
+      }
+
+      for (let y = 0; y < NY - 1; y++) {
+        if (uniform) {
+          field[y][0] = field[y][1];
+          field[y][NX - 1] = field[y][NX - 2];
+        } else {
+          field[y][0] = 0;
+          field[y][NX - 1] = 0;
+        }
+      }
+
+      for (let x = 0; x < NX; x++) {
+        field[NY - 1][x] = HEAT_TEMPERATURE;
+      }
+    }
+
+    function computeSteadyField(topIsFixed) {
+      const uniform = uniformCheckbox.checked;
+      const field = [];
+
+      for (let y = 0; y < NY; y++) {
+        const row = [];
+
+        for (let x = 0; x < NX; x++) {
+          row.push(0);
+        }
+
+        field.push(row);
+      }
+
+      if (uniform) {
+        for (let y = 0; y < NY; y++) {
+          const value = topIsFixed
+            ? HEAT_TEMPERATURE * y / (NY - 1)
+            : HEAT_TEMPERATURE;
+
+          for (let x = 0; x < NX; x++) {
+            field[y][x] = value;
+          }
+        }
+      } else {
+        const L = NX - 1;
+        const H = NY - 1;
+
+        for (let y = 0; y < NY; y++) {
+          for (let x = 0; x < NX; x++) {
+            let sum = 0;
+
+            for (let n = 1; n < NX; n += 2) {
+              const lambda = n * Math.PI / L;
+              const coeff = 4 * HEAT_TEMPERATURE / (n * Math.PI);
+              const sinX = Math.sin(lambda * x);
+
+              if (Math.abs(sinX) < 1e-12) {
+                continue;
+              }
+
+              let shape = 0;
+
+              if (topIsFixed) {
+                shape = Math.sinh(lambda * y) / Math.sinh(lambda * H);
+              } else {
+                shape = Math.cosh(lambda * y) / Math.cosh(lambda * H);
+              }
+
+              sum += coeff * sinX * shape;
+            }
+
+            field[y][x] = sum;
+          }
+        }
+      }
+
+      for (let y = 0; y < NY; y++) {
+        for (let x = 0; x < NX; x++) {
+          if (field[y][x] < 0) {
+            field[y][x] = 0;
+          }
+
+          if (field[y][x] > HEAT_TEMPERATURE) {
+            field[y][x] = HEAT_TEMPERATURE;
+          }
+        }
+      }
+
+      applyBoundaryConditions(field, topIsFixed);
+
+      return field;
+    }
+
+    function updateField(field) {
+      const alpha = Number(aSlider.value);
+      const next = field.map(row => row.slice());
+
+      for (let y = 1; y < NY - 1; y++) {
+        for (let x = 1; x < NX - 1; x++) {
+          const center = field[y][x];
+
+          const top = field[y - 1][x];
+          const bottom = field[y + 1][x];
+          const left = field[y][x - 1];
+          const right = field[y][x + 1];
+
+          let newValue = center + alpha * (top + bottom + left + right - 4 * center);
+
+          if (newValue < 0) {
+            newValue = 0;
+          }
+
+          if (newValue > HEAT_TEMPERATURE) {
+            newValue = HEAT_TEMPERATURE;
+          }
+
+          next[y][x] = newValue;
+        }
+      }
+
+      return next;
+    }
+
+    function maxDifferenceToSteady(field, steady) {
+      let max = 0;
+
+      for (let y = 1; y < NY - 1; y++) {
+        for (let x = 1; x < NX - 1; x++) {
+          const diff = Math.abs(field[y][x] - steady[y][x]);
+
+          if (diff > max) {
+            max = diff;
+          }
+        }
+      }
+
+      return max;
+    }
+
+    function drawField(field, ctx) {
+      const imageData = ctx.createImageData(NX, NY);
+
+      for (let y = 0; y < NY; y++) {
+        for (let x = 0; x < NX; x++) {
+          const value = field[y][x];
+
+          let p = value / HEAT_TEMPERATURE;
+
+          if (p < 0) {
+            p = 0;
+          }
+
+          if (p > 1) {
+            p = 1;
+          }
+
+          const index = (y * NX + x) * 4;
+
+          const red = Math.floor(255 * p);
+          const green = Math.floor(130 * p);
+          const blue = Math.floor(255 * (1 - p));
+
+          imageData.data[index] = red;
+          imageData.data[index + 1] = green;
+          imageData.data[index + 2] = blue;
+          imageData.data[index + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    }
+
+    function updateTimeInfo() {
+      timeInfo.textContent = "Время: " + currentTime;
+    }
+
+    function updateStatuses() {
+      if (fixedReached) {
+        fixedStatus.textContent =
+          "Достигнуто стационарное состояние. Время: " + fixedReachedTime;
+      } else {
+        fixedStatus.textContent = "Стационарное состояние: не достигнуто";
+      }
+
+      if (freeReached) {
+        freeStatus.textContent =
+          "Достигнуто стационарное состояние. Время: " + freeReachedTime;
+      } else {
+        freeStatus.textContent = "Стационарное состояние: не достигнуто";
+      }
+    }
+
+    function animationStep() {
+      if (paused || finished) {
+        return;
+      }
+
+      const steadyEpsilon = getSteadyEpsilon();
+
+      for (let i = 0; i < STEPS_PER_FRAME; i++) {
+        if (!fixedReached) {
+          fixedField = updateField(fixedField);
+          applyBoundaryConditions(fixedField, true);
+        }
+
+        if (!freeReached) {
+          freeField = updateField(freeField);
+          applyBoundaryConditions(freeField, false);
+        }
+
+        currentTime++;
+
+        if (!fixedReached && maxDifferenceToSteady(fixedField, fixedSteady) < steadyEpsilon) {
+          fixedReached = true;
+          fixedReachedTime = currentTime;
+        }
+
+        if (!freeReached && maxDifferenceToSteady(freeField, freeSteady) < steadyEpsilon) {
+          freeReached = true;
+          freeReachedTime = currentTime;
+        }
+
+        if (fixedReached && freeReached) {
+          break;
+        }
+      }
+
+      drawField(fixedField, fixedCtx);
+      drawField(freeField, freeCtx);
+
+      updateTimeInfo();
+      updateStatuses();
+
+      if (fixedReached && freeReached) {
+        finished = true;
+        animationId = null;
+        return;
+      }
+
+      animationId = requestAnimationFrame(animationStep);
+    }
+
+    function restartSimulation() {
+      if (animationId !== null) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+      }
+
+      paused = false;
+      finished = false;
+      pauseButton.textContent = "Пауза";
+
+      NY = Number(heightSlider.value);
+
+      fixedCanvas.width = NX;
+      fixedCanvas.height = NY;
+
+      freeCanvas.width = NX;
+      freeCanvas.height = NY;
+
+      currentTime = 0;
+
+      fixedReached = false;
+      freeReached = false;
+      fixedReachedTime = null;
+      freeReachedTime = null;
+
+      fixedField = createField();
+      freeField = createField();
+
+      fixedSteady = computeSteadyField(true);
+      freeSteady = computeSteadyField(false);
+
+      applyBoundaryConditions(fixedField, true);
+      applyBoundaryConditions(freeField, false);
+
+      drawField(fixedField, fixedCtx);
+      drawField(freeField, freeCtx);
+
+      updateTimeInfo();
+
+      const steadyEpsilon = getSteadyEpsilon();
+
+      if (maxDifferenceToSteady(fixedField, fixedSteady) < steadyEpsilon) {
+        fixedReached = true;
+        fixedReachedTime = 0;
+      }
+
+      if (maxDifferenceToSteady(freeField, freeSteady) < steadyEpsilon) {
+        freeReached = true;
+        freeReachedTime = 0;
+      }
+
+      updateStatuses();
+
+      if (fixedReached && freeReached) {
+        finished = true;
+        return;
+      }
+
+      animationId = requestAnimationFrame(animationStep);
+    }
+
+    function togglePause() {
+      if (finished) {
+        return;
+      }
+
+      paused = !paused;
+
+      if (paused) {
+        pauseButton.textContent = "Возобновить";
+
+        if (animationId !== null) {
+          cancelAnimationFrame(animationId);
+          animationId = null;
+        }
+      } else {
+        pauseButton.textContent = "Пауза";
+        animationId = requestAnimationFrame(animationStep);
+      }
+    }
+
+    aSlider.addEventListener("input", updateLabels);
+    initSlider.addEventListener("input", updateLabels);
+    heightSlider.addEventListener("input", updateLabels);
+
+    aSlider.addEventListener("change", restartSimulation);
+    initSlider.addEventListener("change", restartSimulation);
+    heightSlider.addEventListener("change", restartSimulation);
+    uniformCheckbox.addEventListener("change", restartSimulation);
+
+    restartButton.addEventListener("click", restartSimulation);
+    pauseButton.addEventListener("click", togglePause);
+
+    updateLabels();
+    restartSimulation();
+  </script>
+
+</body>
+</html>
